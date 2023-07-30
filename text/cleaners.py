@@ -64,7 +64,6 @@ def zh_en_ja_mixture_cleaners(text):
 # TODO English cleaners = chinese_to_romaji【英文单字】+ english words【英文单词】
 # http://ipa-reader.xyz/  可以朗读 IPA 国际音标的网站
 def zh_ja_mixture_cleaners(text):
-    # 这部分未完成，所以用不了。
 
     chinese_texts = regex.findall(r'\p{Script=Han}+', text)
     single_en = regex.findall(r'[A-Z]+',text)
@@ -79,6 +78,11 @@ def zh_ja_mixture_cleaners(text):
         cleaned_text = japanese_cleaners2(
             japanese_text).replace('ts', 'ʦ').replace('u', 'ɯ').replace('...', '…')
         text = text.replace(japanese_text, cleaned_text+' ', 1)
+
+    text = re.sub(r'\s+$', '', text)
+
+    # 匹配任何不以逗号、句号、感叹号、问号、连字符、省略号或波浪线结尾的字符。如果找到这样的字符，则将其替换为相同的字符，后面跟一个句号。
+    text = re.sub(r'([^\.,!\?\-…~])$', r'\1.', text) # 结尾没有符号，加一个句号。
     text = text[:-1]
     
     if re.match('[A-Za-zɯɹəɥ→↓↑]', text[-1]):

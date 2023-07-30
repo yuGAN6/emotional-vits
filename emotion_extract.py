@@ -1,4 +1,5 @@
 import torch
+import torchaudio
 import torch.nn as nn
 from transformers import Wav2Vec2Processor
 from transformers.models.wav2vec2.modeling_wav2vec2 import (
@@ -54,17 +55,20 @@ class EmotionModel(Wav2Vec2PreTrainedModel):
         return hidden_states, logits
 
 
-# load model from hub
-device = 'cuda' if torch.cuda.is_available() else "cpu"
-model_name = './emotion-model/wav2vec2-large-robust-12-ft-emotion-msp-dim'
-processor = Wav2Vec2Processor.from_pretrained(model_name)
-model = EmotionModel.from_pretrained(model_name).to(device)
+# # load model from hub
+# device = 'cuda' if torch.cuda.is_available() else "cpu"
+# model_name = './emotion-model/wav2vec2-large-robust-12-ft-emotion-msp-dim'
+# processor = Wav2Vec2Processor.from_pretrained(model_name)
+# model = EmotionModel.from_pretrained(model_name).to(device)
 
 
 def process_func(
         x: np.ndarray,
         sampling_rate: int,
         embeddings: bool = False,
+        processor=None,
+        model=None,
+        device=None
 ) -> np.ndarray:
     r"""Predict emotions or extract embeddings from raw audio signal."""
 
@@ -77,7 +81,7 @@ def process_func(
 
     # run through model
     with torch.no_grad():
-        y = model(y)[0 if embeddings else 1]
+        y = model(y)[0 if embeddings else 1] # 1 是情绪分类
 
     # convert to numpy
     y = y.detach().cpu().numpy()
@@ -113,15 +117,55 @@ def extract_wav(path):
     return emb
 
 
-def preprocess_one(path):
-    wav, sr = librosa.load(path = path, sr = 16000)
-    emb = process_func(np.expand_dims(wav, 0), sr, embeddings=True)
+def preprocess_one(path, processor, model, device):
+    # wav, sr = librosa.load(path = path, sr = 16000)
+    wav , sr = torchaudio.load(path)
+    if wav.dim() >= 2:
+        wav = wav.squeeze(0)
+        
+    wav = torchaudio.transforms.Resample(orig_freq=sr, new_freq=16_000)(wav).numpy()
+    emb = process_func(np.expand_dims(wav, 0), 16_000, embeddings=True ,processor=processor, model=model, device=device)
     np.save(f"{path}.emo.npy", emb.squeeze(0))
     return emb
 
 
+# ====== Torch Process ===========
+def torch_extract(
+        x: torch.Tensor,
+        sampling_rate: int,
+        embeddings: bool = False,
+        processor=None,
+        model=None,
+        device=None
+) -> np.ndarray:
+    r"""Predict emotions or extract embeddings from raw audio signal."""
+
+    # run through processor to normalize signal
+    # always returns a batch, so we just get the first entry
+    # then we put it on the device
+    y = processor(x, sampling_rate=sampling_rate)
+    y = y['input_values'][0]
+    # print(y.shape)
+    y = torch.from_numpy(y).to(device)
+
+    # run through model
+    with torch.no_grad():
+        y = model(y)[0 if embeddings else 1]
+
+    # convert to numpy
+    y = y.detach().cpu().numpy()
+    return y
+
+
 if __name__ == '__main__':
     import argparse
+    from tqdm import tqdm
+
+    # load model from hub   
+    device = 'cuda' if torch.cuda.is_available() else "cpu"
+    model_name = './emotion-model/wav2vec2-large-robust-12-ft-emotion-msp-dim'
+    processor = Wav2Vec2Processor.from_pretrained(model_name)
+    model = EmotionModel.from_pretrained(model_name).to(device)
 
     parser = argparse.ArgumentParser(description='Emotion Extraction Preprocess')
     parser.add_argument('--filelists', dest='filelists',nargs="+", type=str, help='path of the filelists')
@@ -130,7 +174,7 @@ if __name__ == '__main__':
     for filelist in args.filelists:
         print(filelist,"----start emotion extract-------")
         with open(filelist,encoding='utf8') as f:
-            for idx, line in enumerate(f.readlines()):
+            for idx, line in tqdm(enumerate(f.readlines())):
                 path = line.strip().split("|")[0]
                 preprocess_one(path)
                 print(idx, path)

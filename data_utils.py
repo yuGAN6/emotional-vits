@@ -158,11 +158,44 @@ class TextAudioCollate():
 """Multi speaker version"""
 class TextAudioSpeakerLoader(torch.utils.data.Dataset):
     """
-        1) loads audio, speaker_id, text pairs
-        2) normalizes text and converts them to sequences of integers
-        3) computes spectrograms from audio files.
+    ### 用于加载音频、说话者ID和文本对，对文本进行归一化，并将其转换为整数序列，从音频文件计算频谱图。
+
+    1) loads audio, speaker_id, text pairs 加载 音频, 说话人ID, 文本对
+    2) normalizes text and converts them to sequences of integers 文本归一化并转换为整数序列
+    3) computes spectrograms from audio files. 计算音频频谱图
+
+    Args:
+    - audiopaths_sid_text (list): 包含音频文件路径、说话者ID和- 文本的列表。
+    - hparams (argparse.Namespace): 包含各种超参数的命名空间。
+
+    Attributes:
+    - audiopaths_sid_text (list): 加载的音频文件路径、说话者ID- 和文本的列表。
+    - text_cleaners (str): 文本清理器的名称，用于对文本进行清理和- 处理。
+    - max_wav_value (int): 音频文件的最大值（用于归一化）。
+    - sampling_rate (int): 采样率，用于音频处理。
+    - filter_length (int): 滤波器长度，用于计算频谱图。
+    - hop_length (int): 帧移长度，用于计算频谱图。
+    - win_length (int): 窗口长度，用于计算频谱图。
+    - cleaned_text (bool): 是否使用清理后的文本。
+    - add_blank (bool): 是否在文本中添加空白标记。
+    - min_text_len (int): 文本最小长度，用于过滤文本。
+    - max_text_len (int): 文本最大长度，用于过滤文本。
+    - min_audio_len (int): 音频最小长度，用于过滤音频。
+
+    Methods:
+    - _filter(): 过滤文本并存储频谱图长度。
+    - get_audio_text_speaker_pair(audiopath_sid_text): 获取- 音频、文本和说话者ID对。
+    - get_audio(filename): 从文件中加载音频并计算频谱图。
+    - get_text(text): 将文本转换为整数序列。
+    - get_sid(sid): 将说话者ID转换为整数张量。
+    - __getitem__(index): 获取给定索引处的音频、文本和说话者ID- 对。
+    - __len__(): 返回数据集中的样本数量。
     """
     def __init__(self, audiopaths_sid_text, hparams):
+        '''
+        - audiopaths_sid_text (list): 包含音频文件路径、说话者ID和文本的列表。
+        - hparams (argparse.Namespace): 包含各种超参数的命名空间。
+        '''
         self.audiopaths_sid_text = load_filepaths_and_text(audiopaths_sid_text)
         self.text_cleaners = hparams.text_cleaners
         self.max_wav_value = hparams.max_wav_value
@@ -189,19 +222,43 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         """
         # Store spectrogram lengths for Bucketing
         # wav_length ~= file_size / (wav_channels * Bytes per dim) = file_size / (1 * 2)
+        # 通过文件大小估算wav文件的长度【不太理想】
         # spec_length = wav_length // hop_length
 
+        # 存储经过过滤的音频文件路径、说话者ID和文本的新列表
         audiopaths_sid_text_new = []
+        # 存储频谱图的长度
         lengths = []
         for audiopath, sid, text in self.audiopaths_sid_text:
+            # 过滤文本，仅保留长度在min_text_len和max_text_len之间的样本
             if self.min_text_len <= len(text) and len(text) <= self.max_text_len:
+                # 将通过过滤的样本添加到新列表中
                 audiopaths_sid_text_new.append([audiopath, sid, text])
+                # 计算并存储频谱图的长度, 1音频长度 = 2字节 所以x2
                 lengths.append(os.path.getsize(audiopath) // (2 * self.hop_length))
+        # 将过滤后的列表和频谱图长度存储到对象的属性中
         self.audiopaths_sid_text = audiopaths_sid_text_new
         self.lengths = lengths
 
     def get_audio_text_speaker_pair(self, audiopath_sid_text):
-        # separate filename, speaker_id and text
+        '''
+        ### 从文本形式数据读取拆分为:
+        - text: 文本
+        - sepc, wav: 谱图, 音频
+        - sid: 说话人id
+        - emo: 情绪嵌入
+        
+        Args:
+        audiopath_sid_text (list): 包含音频文件路径、说话者ID和文本的列表。
+
+        Returns:
+        tuple: 包含以下五个元素的元组：
+            - 文本（整数序列）
+            - 谱图（频谱图），shape为（频道数，频谱长度）
+            - 音频，shape为（1，音频长度）
+            - 说话人ID（整数张量）
+            - 情绪嵌入（浮点张量）
+        '''
         
         audiopath, sid, text = audiopath_sid_text[0], audiopath_sid_text[1], audiopath_sid_text[2]
         # print(audiopath, text)
@@ -213,24 +270,42 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         return (text, spec, wav, sid, emo)
 
     def get_audio(self, filename):
+        """
+        从音频文件中加载音频并计算频谱图。
+
+        Args:
+            filename (str): 音频文件的路径。
+
+        Returns:
+            tuple: 包含以下两个元素的元组：
+                - 频谱图（频谱矩阵），shape为（频道数，频谱长度）
+                - 归一化后的音频，shape为（1，音频长度）
+        """
+        # 从音频文件中加载音频和采样率
         audio, sampling_rate = load_wav_to_torch(filename)
-        # print(f'{filename}, length {len(audio) / sampling_rate}')
+        # 若采样率与目标采样率不同，则进行重采样
         if sampling_rate != self.sampling_rate:
             audio = torchaudio.transforms.Resample(orig_freq=sampling_rate, new_freq=self.sampling_rate)(audio)
+            # 如果需要，可以打印采样率相关信息，或者抛出异常
             # print(f"sr:{sampling_rate}, target sr:{self.sampling_rate}")
             # raise ValueError("{} {} SR doesn't match target {} SR".format(
             #     sampling_rate, self.sampling_rate))
-        audio_norm = audio / self.max_wav_value
+        # 对音频进行归一化处理，使其值范围在[-1, 1]之间
+        audio_norm = audio / self.max_wav_value # 32768
+        # 将音频张量的维度由(音频长度,)调整为(1, 音频长度)，以符合频谱图计算的输入格式
         audio_norm = audio_norm.unsqueeze(0)
+        # 使用频谱图文件来存储已经计算过的频谱图，如果文件已存在，则直接加载
         spec_filename = filename.replace(".wav", ".spec.pt")
         if os.path.exists(spec_filename):
             spec = torch.load(spec_filename)
         else:
+            # 如果频谱图文件不存在，则计算频谱图并保存到文件
             spec = spectrogram_torch(audio_norm, self.filter_length, # n_fft - self.filter_length
                 self.sampling_rate, self.hop_length, self.win_length,
                 center=False)
             spec = torch.squeeze(spec, 0)
             torch.save(spec, spec_filename)
+        # 返回计算得到的频谱图和归一化后的音频
         return spec, audio_norm
 
     def get_text(self, text):
